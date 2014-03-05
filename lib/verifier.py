@@ -38,6 +38,7 @@ class TxVerifier(threading.Thread):
         self.merkle_roots    = storage.get('merkle_roots',{})      # hashed by me
         self.lock = threading.Lock()
         self.running = False
+        self.requested_merkle = []
         self.queue = Queue.Queue()
 
 
@@ -97,16 +98,15 @@ class TxVerifier(threading.Thread):
     def run(self):
         with self.lock:
             self.running = True
-        requested_merkle = []
 
         while self.is_running():
             # request missing tx
             for tx_hash, tx_height in self.transactions.items():
                 if tx_hash not in self.verified_tx:
-                    if self.merkle_roots.get(tx_hash) is None and tx_hash not in requested_merkle:
+                    if self.merkle_roots.get(tx_hash) is None and tx_hash not in self.requested_merkle:
                         if self.network.send([ ('blockchain.transaction.get_merkle',[tx_hash, tx_height]) ], lambda i,r: self.queue.put(r)):
                             print_error('requesting merkle', tx_hash)
-                            requested_merkle.append(tx_hash)
+                            self.requested_merkle.append(tx_hash)
 
             try:
                 r = self.queue.get(timeout=1)
@@ -127,7 +127,7 @@ class TxVerifier(threading.Thread):
             if method == 'blockchain.transaction.get_merkle':
                 tx_hash = params[0]
                 self.verify_merkle(tx_hash, result)
-                requested_merkle.remove(tx_hash)
+                self.requested_merkle.remove(tx_hash)
 
 
     def verify_merkle(self, tx_hash, result):
@@ -166,3 +166,6 @@ class TxVerifier(threading.Thread):
                     self.verified_tx.pop(tx_hash)
                     if tx_hash in self.merkle_roots:
                         self.merkle_roots.pop(tx_hash)
+
+    def outstanding_requests(self):
+        return self.is_running() and len(self.requested_merkle) > 0
