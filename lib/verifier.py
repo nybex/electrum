@@ -127,15 +127,20 @@ class TxVerifier(threading.Thread):
             if method == 'blockchain.transaction.get_merkle':
                 tx_hash = params[0]
                 self.verify_merkle(tx_hash, result)
-                self.requested_merkle.remove(tx_hash)
-
 
     def verify_merkle(self, tx_hash, result):
         tx_height = result.get('block_height')
         pos = result.get('pos')
         self.merkle_roots[tx_hash] = self.hash_merkle_root(result['merkle'], tx_hash, pos)
         header = self.blockchain.read_header(tx_height)
-        if not header: return
+
+        # If the header isn't there, then the blockchain hasn't caught up
+        # Lets requeue the tx
+        if not header:
+            self.requested_merkle.remove(tx_hash)
+            self.transactions[tx_hash] = result.get('block_height')
+            return
+
         assert header.get('merkle_root') == self.merkle_roots[tx_hash]
         # we passed all the tests
         timestamp = header.get('timestamp')
@@ -144,6 +149,7 @@ class TxVerifier(threading.Thread):
         print_error("verified %s"%tx_hash)
         self.storage.put('verified_tx3', self.verified_tx, True)
         self.network.trigger_callback('updated')
+        self.requested_merkle.remove(tx_hash)
 
 
     def hash_merkle_root(self, merkle_s, target_hash, pos):
